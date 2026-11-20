@@ -1,212 +1,146 @@
-# Flow
+# Flow by RPay
 
-Lightning commerce. Buyers pay a Flow invoice on Flow’s Lightning backend. Merchants withdraw Bitcoin from that backend, or local currency through Bitnob (withdrawals only — never for sales invoices).
+Flow is a Lightning commerce workspace for small merchants. A merchant can publish products in a storefront, share a reusable product link, create a one-off checkout, and see who paid. Buyers receive a hosted invoice and pay from a compatible Lightning wallet. The dashboard also includes withdrawals, an AI assistant, developer keys, and webhook settings.
 
-## Run
+**Live demo:** [flow.rpay.space](https://flow.rpay.space) · **Developer docs:** [flow.rpay.space/docs](https://flow.rpay.space/docs) · **API health:** [flow-rpay-api.vercel.app/health](https://flow-rpay-api.vercel.app/health)
 
-1. Copy `.env.example` to `.env`.
-2. `docker compose up -d` — starts **Postgres only**. No local bitcoind/LND (avoids multi-GB IBD on metered connections).
-3. Configure **NWC** (Nostr Wallet Connect) — see below.
-4. `pnpm install`
-5. `pnpm db:generate`
-6. `pnpm db:push`
-7. `pnpm db:seed` — demo merchant for judges (idempotent)
-8. `pnpm dev`
+> This deployment is a sandbox demo. Its NWC faucet sats have no mainnet value. Do not use the seeded demo account or test wallet for real funds.
 
-Web: http://localhost:3000 · API: http://localhost:4000
+## What works today
 
-The API refuses Lightning work until a backend is configured. It never invents invoices.
-
-## Judge demo
-
-Use these fixed credentials on production or local after seeding:
-
-| | |
+| Area | Current behavior |
 | --- | --- |
-| **URL** | https://flow.rpay.space · local: http://localhost:3000 |
-| **Email** | `demo@flow.rpay.space` |
-| **Password** | `FlowDemo2026!` |
+| Storefront and links | A merchant creates products once; buyers can reuse the store or product link for separate orders. |
+| Checkout | Flow creates a Lightning invoice, shows its amount, expiry, QR code, and payment status. Buyers can provide a name and email for the merchant's order record. |
+| Merchant workspace | Shows balance, recent payments, products, links, withdrawals, settings, and developer credentials. |
+| Assistant | Answers merchant questions about products, unpaid orders, and balance using workspace tools. Requires a server OpenAI key or a merchant's encrypted key. |
+| Developer API | API keys, idempotent write endpoints, payment lookups, and signed merchant webhooks. See [`/docs`](https://flow.rpay.space/docs). |
+| Local currency | Bitnob sandbox payout code is present, but the route stays unavailable until Bitnob authentication succeeds and a webhook signing secret is configured. |
 
-Shop: **Flow Demo Shop** — three sample products (prices in sats) plus pay link `/pay/link/flow-demo`.
+At the last check on **21 November 2026**, the public web page and API health endpoint responded and the API reported `databaseConfigured: true`. The same health check reported local Bitnob payouts as unconfigured. A healthy API does not by itself prove a complete payment or payout.
 
-**Notes for judges**
+## Architecture
 
-- Lightning uses **testnet / NWC demo sats**, not mainnet. Do not expect real on-chain value.
-- Local currency withdraw may show **unavailable** if payout credentials are not configured.
-- Re-seed anytime: `pnpm db:seed` (upserts by email; safe to re-run). For production Neon, point `DATABASE_URL` at that DB first (never commit the URL).
+```mermaid
+flowchart LR
+  Buyer[Buyer] --> Web[Next.js web app]
+  Merchant[Merchant] --> Web
+  Web -->|same-origin /api proxy| API[Fastify API]
+  API --> DB[(Postgres / Prisma)]
+  API --> Wallet[NWC Lightning wallet]
+  API --> AI[OpenAI API]
+  API --> Bitnob[Bitnob sandbox]
+  Bitnob -->|signed payout event| API
+  API -->|signed payment event| MerchantHook[Merchant webhook]
+  Telegram[Telegram bot] --> API
+```
 
-## Lightning: NWC (primary — hackathon)
+This is a pnpm workspace. `apps/web` contains the Next.js storefront, checkout, dashboard, and docs. `apps/api` contains authentication, checkout and payout routes, provider adapters, and webhook handling. `packages/db` contains the Prisma schema and seed; `packages/contracts` contains validation and shared helpers; `packages/sdk` contains the TypeScript client.
 
-Flow talks to a wallet over [Nostr Wallet Connect](https://nwc.dev) using [`@getalby/sdk`](https://www.npmjs.com/package/@getalby/sdk). No CoinOS signup, no OpenNode approval, no Voltage invite, no local IBD.
+### Payment path
 
-| Variable | Purpose |
-| --- | --- |
-| `NWC_CONNECTION_STRING` | Full `nostr+walletconnect://…` URI from the faucet or Alby Hub |
-| `LIGHTNING_NETWORK` | Optional banner hint (`testnet` / `mainnet` / `regtest`) |
+1. A merchant publishes a product, shares a payment link, or creates a checkout through the dashboard or API.
+2. Flow stores an order and asks the configured Lightning backend for a BOLT11 invoice.
+3. The buyer pays the invoice. Flow checks the provider's invoice state before marking the payment paid.
+4. A database transaction marks the order paid and credits the merchant's sat balance once. Flow then attempts the merchant's `payment.paid` webhook.
 
-### Signup (do this next)
+On a local server, open payments are polled. On Vercel, the checkout and payment read endpoints reconcile their status when requested; there is no permanently running worker.
 
-1. **Create a test wallet** (pick one):
-   - **Faucet API (fastest):**
+### Local currency path
+
+Bitnob is used for **withdrawals only**. Sales invoices come from the Lightning backend. The sandbox path checks the Bitnob environment, quotes a payout, attaches a beneficiary, funds the provider's invoice, finalizes the payout, and waits for a signed Bitnob event before marking the withdrawal complete. A quote or a submitted funding payment is not proof that fiat reached the recipient.
+
+## Run locally
+
+**Prerequisites:** Node.js 22, pnpm 10, Docker with Compose, and an NWC test wallet if you want to create payable invoices.
 
 ```powershell
-# Returns a nostr+walletconnect://... string (keep it secret)
-Invoke-RestMethod -Method POST -Uri "https://faucet.nwc.dev?balance=10000"
+Copy-Item .env.example .env
+docker compose up -d
+pnpm install
+pnpm db:generate
+pnpm db:push
+pnpm dev
 ```
 
-   - **Sandbox UI:** open **https://sandbox.albylabs.com/**, create/test wallets, copy a connection string.
-   - **Production later:** connect a real wallet at [nwc.dev](https://nwc.dev) / Alby Hub and paste that string instead.
+Open [localhost:3000](http://localhost:3000). The API runs at [localhost:4000](http://localhost:4000); `GET /health` reports its configured network and integration flags. `docker compose up -d` starts Postgres only. No local Bitcoin node is needed for the default NWC setup.
 
-2. Put the string in `.env`:
-
-```env
-NWC_CONNECTION_STRING=nostr+walletconnect://...
-# leave COINOS_TOKEN, OPENNODE_*, and LND_* empty (or filled — NWC still wins when set)
-```
-
-3. Restart `pnpm dev`. Logs should show `Lightning ready via NWC (Nostr Wallet Connect)`.
-4. Create a checkout. Pay the BOLT11 with a **second** faucet wallet (same isolated system), or use the sandbox playground. Faucet wallets cannot pay real external Lightning wallets.
-
-Docs: [nwc.dev](https://nwc.dev) · Faucet: [faucet.nwc.dev](https://faucet.nwc.dev) · Sandbox: [sandbox.albylabs.com](https://sandbox.albylabs.com/)
-
-### Honesty / limits (read this)
-
-- **NWC faucet = demo sats** — isolated test wallets, not spendable on public Lightning. Banner says so.
-- **Settlement** — Flow polls NWC `lookup_invoice` by payment hash. Paid only when the wallet reports `settled` (preimage checked when present). Never invents success.
-- **Lightning withdraw** — `pay_invoice` via the same NWC connection (needs budget/balance on that wallet).
-- **On-chain withdraw** — **not supported over NWC**. Use a Lightning invoice, or CoinOS/LND, or Bitnob for local currency.
-- Provider priority when multiple are set: **NWC → CoinOS → OpenNode → LND**.
-
-## Why not the usual “testnet API” options?
-
-| Option | Why it is not primary |
-| --- | --- |
-| **CoinOS** | Works, but mainnet custodial real sats — still supported as fallback. |
-| **OpenNode development** | Often requires request/approval before keys work. |
-| **Voltage / hosted LND** | Invite or paid gate; also needs TLS + macaroon setup. |
-| **Local bitcoind testnet** | Multi-GB IBD — rejected for metered connections. |
-
-## Optional: CoinOS (mainnet custodial)
-
-Only if you leave `NWC_CONNECTION_STRING` empty:
-
-```env
-COINOS_TOKEN=eyJhbGciOiJIUzI1NiIs...
-```
-
-Register at [coinos.io](https://coinos.io) → Settings → API token. Real sats — use tiny amounts.
-
-## Optional: OpenNode Development (testnet)
-
-```env
-# Leave NWC_CONNECTION_STRING and COINOS_TOKEN empty
-OPENNODE_API_KEY=your_dev_api_key
-OPENNODE_API_URL=https://dev-api.opennode.com
-```
-
-Flow rejects non-dev OpenNode hosts (`api.opennode.com`).
-
-## Optional: Hosted LND REST
-
-Leave `NWC_CONNECTION_STRING`, `COINOS_TOKEN`, and `OPENNODE_API_KEY` empty and set:
+Before starting, edit `.env`:
 
 | Variable | Purpose |
 | --- | --- |
-| `LND_REST_URL` | HTTPS base, e.g. `https://….t.voltageapp.io:8080` |
-| `LND_MACAROON` | Hex-encoded admin (or invoice+pay) macaroon |
-| `LND_TLS_CERT_PATH` | Path to host `tls.cert` (preferred) |
-| `LND_TLS_SKIP_VERIFY` | `true` only as a last-resort dev override |
+| `DATABASE_URL` | Postgres connection. The example points to the local Compose database. |
+| `ENCRYPTION_KEY` | 32 random bytes as 64 hex characters. Replace the all-zero example value. |
+| `NWC_CONNECTION_STRING` | Nostr Wallet Connect URI for the test wallet. Required for the default Lightning path. |
+| `API_URL`, `APP_URL`, `WEB_ORIGIN` | Local API, web, and allowed browser origin; change to public HTTPS origins when deploying. |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:4000` locally; `/api` on Vercel. |
+| `OPENAI_API_KEY`, `OPENAI_MODEL` | Optional server key and model for Flow AI. A merchant can instead save a key in Settings. |
+| `BITNOB_CLIENT_ID`, `BITNOB_CLIENT_SECRET` | Bitnob API authentication; sandbox credentials are needed for local payouts. |
+| `BITNOB_WEBHOOK_SECRET` | Separate Bitnob webhook signing secret, created in Bitnob's webhook settings. |
 
-Optional: `LND_MACAROON_PATH` instead of hex; `LND_TLS_CERT` PEM instead of a file.
+Generate an encryption key with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Keep `.env`, wallet connection strings, API keys, macaroons, and webhook secrets out of Git. The repository ignores local env files.
 
-## Bitnob (local currency withdrawals)
+For a demo wallet, use [NWC's faucet](https://faucet.nwc.dev) or the [Alby sandbox](https://sandbox.albylabs.com/). A buyer needs a **second wallet on the same test system** to pay a faucet invoice. These isolated sats cannot fund an external Bitnob Lightning invoice. Provider priority is NWC, then CoinOS, OpenNode, and LND when configured; their credentials and network behavior differ.
 
-Bitnob Business API is **payout-only**. It is never used for sales invoices (sales stay on NWC / Lightning).
+To add the optional sample merchant and three products after the database is ready, run `pnpm db:seed`. The seed upserts the same demo account on repeat runs. Its fixed credentials are intended only for this sandbox demo and are defined in [`packages/db/prisma/seed.ts`](packages/db/prisma/seed.ts).
 
-### Current status / limitation
+### Checks
 
-Local payouts stay **disabled** until `GET /api/whoami` succeeds with `environment=sandbox` using your loaded credentials.
-
-If whoami returns **401 Invalid client credentials**:
-
-1. Open [app.bitnob.com](https://app.bitnob.com) → **Settings → API Keys** → create a **sandbox** key.
-2. Map fields exactly:
-   - `BITNOB_CLIENT_ID` = Client ID (dashboard may label this `apiKey`)
-   - `BITNOB_CLIENT_SECRET` = Client Secret (dashboard may label this `secretKey`)
-   - Do **not** put the webhook signing secret in `BITNOB_CLIENT_SECRET`
-3. `BITNOB_WEBHOOK_SECRET` = webhook signing secret from **Settings → Webhooks** (different from the API secret)
-4. Restart the API and hit Dashboard → Withdraw → Local currency (or `GET /dashboard/withdrawals/local/status`)
-
-Until whoami succeeds, quote/confirm return clear `503` (`payouts_unconfigured` / `invalid_credentials`). Swapping ID↔secret was tried against the live API and still 401’d with the keys currently in local `.env` — those credentials need to be re-created in the dashboard.
-
-### Sandbox payout sequence (implemented)
-
-1. **Quote** — `source=onchain`, `chain=LIGHTNING`, `amount_in_base_units=<sats>`
-2. **Initialize** — beneficiary + `callback_url` → funding Lightning invoice
-3. **Fund** — Flow pays that invoice from custody (`payInvoice` / NWC when configured)
-4. **Finalize** — after funding is submitted
-5. **Webhook** — `POST {API_URL}/webhooks/bitnob` verified with HMAC-SHA512; marks withdrawal completed/failed
-
-There is **no** documented Bitnob “simulate payout deposit” for onchain LIGHTNING quotes (VA simulate-deposit is unrelated). Sandbox end-to-end funding therefore needs a Lightning wallet that can pay the funding invoice. NWC faucet wallets often cannot.
-
-`API_URL` must be public **HTTPS** for webhooks (Vercel API URL, or a tunnel like ngrok/cloudflared locally).
-
-## Deploy (GitHub + Vercel)
-
-Monorepo layout:
-
-| Project | Root directory | Role |
-| --- | --- | --- |
-| `flow-rpay-api` | `apps/api` | Fastify on Vercel Fluid / serverless (`export default` app) |
-| `flow-rpay-web` | `apps/web` | Next.js; rewrites `/api/*` → API via `FLOW_SERVER_API_URL` |
-
-Payment settlement on Vercel does **not** use a long-lived poller. Checkout/payment GETs call `settleFromNode` / `pollOpenPayments` on read.
-
-### Required Vercel env (both projects unless noted)
-
-| Variable | Where | Notes |
-| --- | --- | --- |
-| `DATABASE_URL` | API (and generate) | **Required for prod.** Neon / Postgres — never commit. Localhost-only in repo `.env*` — do not invent credentials. |
-| `ENCRYPTION_KEY` | API | 64 hex chars (32 bytes) |
-| `NWC_CONNECTION_STRING` | API | Lightning backend |
-| `OPENAI_API_KEY` / `OPENAI_MODEL` | API | Assistant; missing → clear 503, payments still work |
-| `WEB_ORIGIN` | API | Production web origin (cookie CORS) |
-| `APP_URL` | API | Public web URL (storefront / pay links) |
-| `API_URL` | API | Public **HTTPS** API origin (webhooks) |
-| `NEXT_PUBLIC_API_URL` | Web | Use `/api` for same-origin proxy |
-| `FLOW_SERVER_API_URL` | Web (server) | Internal/public API origin for Next rewrites |
-| `BITNOB_*` | API | Only after whoami succeeds |
-
-### Blocker: Neon / `DATABASE_URL`
-
-Production API needs a hosted Postgres URL. Adding Neon via CLI is blocked until the project owner accepts Marketplace terms:
-
-1. Open [Accept Neon terms](https://vercel.com/abdu-shakurs-projects/~/integrations/accept-terms/neon?source=cli)
-2. Then: `vercel --cwd apps/api integration add neon --name flow-rpay-db --plan free_v3 --no-claim -m region=iad1 -m auth=false --environment production --environment preview --environment development`
-3. Confirm `DATABASE_URL` appears under `flow-rpay-api` (`vercel env ls --cwd apps/api`) and redeploy the API.
-
-Until then, API routes that touch Prisma will fail at runtime even if the deploy builds. `/health` still responds and reports `databaseConfigured: false`.
-
-### Deployment protection
-
-`flow-rpay-api` must be **public** (SSO/Standard Protection off) so web rewrites, wallets, and webhooks can reach `*.vercel.app` and production domains. Prefers: `vercel project protection disable flow-rpay-api --sso`. Keep preview-only protection on web if desired; use Automation Bypass (`x-vercel-protection-bypass`) for CI against protected preview URLs.
-
-### CLI sketch
-
-```bash
-# API
-cd apps/api
-vercel link --yes --project flow-rpay-api
-# After Neon terms: vercel integration add neon … (see above) OR vercel env add DATABASE_URL production
-# …other secrets already set via vercel env add…
-vercel deploy --prod
-
-# Web
-cd ../web
-vercel link --yes --project flow-rpay-web
-vercel env add NEXT_PUBLIC_API_URL production --type config   # value: /api
-vercel env add FLOW_SERVER_API_URL production --type config   # value: https://<api-deployment>
-vercel deploy --prod
+```powershell
+pnpm typecheck
+pnpm test
+pnpm --filter @flow/web build
 ```
 
-Never commit `.env`, wallet passwords, macaroons, or TLS material. `.gitignore` already excludes them.
+The contract tests cover shared validation. They are not a substitute for a paid-invoice test or a completed Bitnob sandbox payout.
+
+## Deploy on Vercel
+
+The GitHub repository is deployed as two Vercel projects:
+
+| Project | Root directory | Responsibility |
+| --- | --- | --- |
+| `flow-rpay-web` | `apps/web` | Next.js pages and same-origin `/api/*` rewrite. |
+| `flow-rpay-api` | `apps/api` | Fastify routes in a Vercel Node function. |
+
+Use hosted Postgres for the API. The Vercel project needs `DATABASE_URL`, `ENCRYPTION_KEY`, a Lightning backend credential, `APP_URL`, `API_URL`, and `WEB_ORIGIN`. Set `NEXT_PUBLIC_API_URL=/api` and `FLOW_SERVER_API_URL=https://<public-api-origin>` on the web project so browser requests and session cookies stay on the web origin. Configure optional AI and Bitnob variables only on the API project. Both project directories contain their build configuration in `vercel.json`.
+
+After provisioning a new database, apply the Prisma schema with `pnpm db:push` against that database. Seed only if you intentionally want the public demo account. Check the deployed `/health`, create an invoice, pay it with a second compatible test wallet, and verify the order and balance before calling a deployment ready. The API must accept public HTTPS requests for Bitnob and Telegram webhooks; deployment protection on those endpoints would block them.
+
+### Making Bitnob sandbox payouts available
+
+1. In Bitnob **Settings → API Keys**, create sandbox credentials. Set `BITNOB_CLIENT_ID` to the dashboard's Client ID and `BITNOB_CLIENT_SECRET` to its API secret. The `{ name, apiKey, secretKey }` download uses `name` as a label; verify how `apiKey` maps to Client ID with Bitnob's read-only `GET /api/whoami` check. An earlier local check with the supplied pair returned `401 Invalid client credentials`, so do not assume the current pair works.
+2. Set the API project's `API_URL` to its public HTTPS origin. In Bitnob **Settings → Webhooks**, configure `https://<api-origin>/webhooks/bitnob` and copy that webhook's signing secret into `BITNOB_WEBHOOK_SECRET`. It is distinct from the API secret.
+3. Redeploy the API, then inspect Dashboard → Withdraw → Local currency. It should show the verified sandbox environment. Complete a small end-to-end sandbox payout and confirm that the webhook changes its status to completed. Do not use production Bitnob keys for this demo.
+
+## Constraints and known gaps
+
+- **Test value only:** NWC faucet sats are isolated demo units. A faucet wallet often cannot pay Bitnob's funding invoice, even when both systems are called “sandbox.” A compatible funding wallet is required for that path.
+- **Bitnob is gated:** A Client ID and secret being present is not enough. Authentication must succeed, `whoami.environment` must be `sandbox`, and the webhook secret and public callback URL must be configured.
+- **Request-driven settlement on Vercel:** Invoice settlement is checked on reads. A buyer who closes the page immediately can leave status updates waiting until the next checkout or merchant request. A durable reconciliation worker is still needed.
+- **Webhooks:** Bitnob events are signature-checked and deduplicated. Outbound merchant payment webhooks are currently best effort without an automatic retry queue; merchants should reconcile with the payment API.
+- **Demo account:** The seed uses fixed credentials and demo data. It is not an account or wallet model for production funds.
+- **Provider support:** On-chain Bitcoin withdrawal requires a backend that supports `sendCoins`; NWC supports Lightning invoice payments, not that path. Local payout beneficiary requirements also vary by country.
+
+## Metrics to track
+
+There is no full analytics dashboard yet. These definitions are the starting point for instrumentation; do not report them as measured results until events and baselines exist.
+
+| Metric | Definition | Why it matters |
+| --- | --- | --- |
+| Checkout completion | Paid checkouts ÷ created checkouts, segmented by product and network. | Reveals friction between invoice creation and payment. |
+| Time to settlement | Time from invoice creation to verified paid state; track median and p95. | Exposes slow provider lookups and delayed status updates. |
+| Invoice expiry and failure | Expired or failed checkouts ÷ created checkouts, with provider error category. | Separates buyer abandonment from integration failures. |
+| Payout completion | Completed sandbox payouts ÷ confirmed payouts, plus time from confirm to final event. | Shows whether funding and fiat settlement actually finish. |
+| Webhook reliability | Invalid signatures, duplicate events, delivery failures, and reconciliation mismatches. | Detects missing or untrusted payment and payout updates. |
+| API and Assistant reliability | Route error rate and p95 latency; Assistant successful replies ÷ requests. | Keeps the dashboard and AI usable as traffic grows. |
+
+## Next iteration
+
+1. **Complete a verified Bitnob sandbox payout:** replace the rejected credential pair, register the production-shaped webhook URL, test a small payout, and document the observed provider responses and funding wallet requirements.
+2. **Make settlement durable:** add scheduled invoice and payout reconciliation, an outbound webhook retry queue, and an operations view for stuck states.
+3. **Improve payout entry:** load country-specific beneficiary requirements and bank or network options from Bitnob, validate accounts before confirmation, and show a clear quote expiry and fee breakdown.
+4. **Instrument the funnel:** record the metrics above, establish a sandbox baseline, and add alerts for webhook failures and prolonged pending payments.
+5. **Harden production access:** remove fixed demo credentials from any real-money environment, separate test and live wallets and databases, and add integration tests for complete checkout and payout lifecycles.
+
+Flow's public developer reference lives at [`/docs`](https://flow.rpay.space/docs). The source of truth for request validation is [`packages/contracts/src/index.ts`](packages/contracts/src/index.ts), and the persistence model is [`packages/db/prisma/schema.prisma`](packages/db/prisma/schema.prisma).
