@@ -12,5 +12,8 @@ creds/*
 *.tsbuildinfo
 .vercel/
 tmp-*
+tmp-*.mjs
 docker/regtest/wallet-password.txt
+*.pem
+*.macaroon
 packages/db/src/generated

@@ -246,27 +246,59 @@ export async function buildServer() {
 
   app.get("/dashboard/withdrawals/local/status", async (request) => {
     await requireUser(request);
+    const webhookUrl = `${env.apiUrl.replace(/\/$/, "")}/webhooks/bitnob`;
     if (!bitnobConfigured()) {
       return {
         configured: false,
         webhookSecretSet: bitnobWebhookConfigured(),
         environment: null,
-        webhookUrl: `${env.apiUrl.replace(/\/$/, "")}/webhooks/bitnob`,
+        reason: "missing_credentials",
+        message: "Set BITNOB_CLIENT_ID and BITNOB_CLIENT_SECRET (sandbox) to enable local payouts.",
+        webhookUrl,
       };
     }
-    const whoami = await bitnobWhoami();
-    return {
-      configured: whoami.environment === "sandbox" && bitnobWebhookConfigured(),
-      webhookSecretSet: bitnobWebhookConfigured(),
-      environment: whoami.environment ?? null,
-      webhookUrl: `${env.apiUrl.replace(/\/$/, "")}/webhooks/bitnob`,
-    };
+    try {
+      const whoami = await bitnobWhoami();
+      const environment = (whoami.environment ?? "").toLowerCase() || null;
+      const sandbox = environment === "sandbox";
+      const ready = sandbox && bitnobWebhookConfigured();
+      return {
+        configured: ready,
+        webhookSecretSet: bitnobWebhookConfigured(),
+        environment,
+        reason: ready ? "ready" : !sandbox ? "not_sandbox" : "webhook_unconfigured",
+        message: ready
+          ? "Sandbox local payouts are ready."
+          : !sandbox
+            ? "Local payouts require sandbox credentials (whoami.environment must be sandbox)."
+            : "Set BITNOB_WEBHOOK_SECRET and a public HTTPS API_URL for webhooks.",
+        webhookUrl,
+      };
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "Could not verify payout credentials.";
+      return {
+        configured: false,
+        webhookSecretSet: bitnobWebhookConfigured(),
+        environment: null,
+        reason: error instanceof ApiError && error.code === "invalid_credentials" ? "invalid_credentials" : "provider_error",
+        message,
+        webhookUrl,
+      };
+    }
   });
 
   app.get("/dashboard/withdrawals/local/countries", async (request) => {
     await requireUser(request);
-    const countries = await listSupportedCountries();
-    return { countries };
+    if (!bitnobConfigured()) {
+      throw new ApiError(503, "payouts_unconfigured", "Local payouts are not configured.");
+    }
+    try {
+      const countries = await listSupportedCountries();
+      return { countries };
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ApiError(503, "payouts_unconfigured", "Could not load payout corridors.");
+    }
   });
 
   app.post("/dashboard/withdrawals/local/quote", async (request) => {
@@ -371,6 +403,7 @@ export async function buildServer() {
   app.get("/v1/payments/:id", async (request) => {
     const business = await requireApiKey(request);
     const { id } = request.params as { id: string };
+    await settleFromNode(id);
     const payment = await ownedPayment(business.id, id);
     return paymentView(payment, business.name, payment.order);
   });

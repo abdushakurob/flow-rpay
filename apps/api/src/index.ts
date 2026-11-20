@@ -5,7 +5,11 @@ import { assertTestnet, lightningProviderLabel } from "./lightning.js";
 
 const app = await buildServer();
 
-app.listen({ port: env.port, host: "0.0.0.0" }).then(async () => {
+// Vercel Fluid / serverless: export the Fastify instance; do not bind a port.
+export default app;
+
+async function startLocal() {
+  await app.listen({ port: env.port, host: "0.0.0.0" });
   app.log.info(`Flow API at ${env.apiUrl}`);
   try {
     await assertTestnet();
@@ -16,9 +20,13 @@ app.listen({ port: env.port, host: "0.0.0.0" }).then(async () => {
       "Lightning unavailable until NWC_CONNECTION_STRING (recommended) or COINOS_TOKEN or OPENNODE_API_KEY or LND_REST_URL + macaroon are set",
     );
   }
-  if (!process.env.VERCEL) {
-    setInterval(() => {
-      void pollOpenPayments().catch((error) => app.log.warn(error));
-    }, 4000);
-  }
-});
+  // Always-on poller is for long-lived local/dev processes only.
+  // On Vercel, payment GETs call settleFromNode / pollOpenPayments on read instead.
+  setInterval(() => {
+    void pollOpenPayments().catch((error) => app.log.warn(error));
+  }, 4000);
+}
+
+if (!process.env.VERCEL) {
+  await startLocal();
+}

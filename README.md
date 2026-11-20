@@ -100,6 +100,80 @@ Leave `NWC_CONNECTION_STRING`, `COINOS_TOKEN`, and `OPENNODE_API_KEY` empty and 
 
 Optional: `LND_MACAROON_PATH` instead of hex; `LND_TLS_CERT` PEM instead of a file.
 
-## Bitnob
+## Bitnob (local currency withdrawals)
 
-Bitnob is **payout-only** (local currency withdrawals). It is never used for sales invoices.
+Bitnob Business API is **payout-only**. It is never used for sales invoices (sales stay on NWC / Lightning).
+
+### Current status / limitation
+
+Local payouts stay **disabled** until `GET /api/whoami` succeeds with `environment=sandbox` using your loaded credentials.
+
+If whoami returns **401 Invalid client credentials**:
+
+1. Open [app.bitnob.com](https://app.bitnob.com) → **Settings → API Keys** → create a **sandbox** key.
+2. Map fields exactly:
+   - `BITNOB_CLIENT_ID` = Client ID (dashboard may label this `apiKey`)
+   - `BITNOB_CLIENT_SECRET` = Client Secret (dashboard may label this `secretKey`)
+   - Do **not** put the webhook signing secret in `BITNOB_CLIENT_SECRET`
+3. `BITNOB_WEBHOOK_SECRET` = webhook signing secret from **Settings → Webhooks** (different from the API secret)
+4. Restart the API and hit Dashboard → Withdraw → Local currency (or `GET /dashboard/withdrawals/local/status`)
+
+Until whoami succeeds, quote/confirm return clear `503` (`payouts_unconfigured` / `invalid_credentials`). Swapping ID↔secret was tried against the live API and still 401’d with the keys currently in local `.env` — those credentials need to be re-created in the dashboard.
+
+### Sandbox payout sequence (implemented)
+
+1. **Quote** — `source=onchain`, `chain=LIGHTNING`, `amount_in_base_units=<sats>`
+2. **Initialize** — beneficiary + `callback_url` → funding Lightning invoice
+3. **Fund** — Flow pays that invoice from custody (`payInvoice` / NWC when configured)
+4. **Finalize** — after funding is submitted
+5. **Webhook** — `POST {API_URL}/webhooks/bitnob` verified with HMAC-SHA512; marks withdrawal completed/failed
+
+There is **no** documented Bitnob “simulate payout deposit” for onchain LIGHTNING quotes (VA simulate-deposit is unrelated). Sandbox end-to-end funding therefore needs a Lightning wallet that can pay the funding invoice. NWC faucet wallets often cannot.
+
+`API_URL` must be public **HTTPS** for webhooks (Vercel API URL, or a tunnel like ngrok/cloudflared locally).
+
+## Deploy (GitHub + Vercel)
+
+Monorepo layout:
+
+| Project | Root directory | Role |
+| --- | --- | --- |
+| `flow-rpay-api` | `apps/api` | Fastify on Vercel Fluid / serverless (`export default` app) |
+| `flow-rpay-web` | `apps/web` | Next.js; rewrites `/api/*` → API via `FLOW_SERVER_API_URL` |
+
+Payment settlement on Vercel does **not** use a long-lived poller. Checkout/payment GETs call `settleFromNode` / `pollOpenPayments` on read.
+
+### Required Vercel env (both projects unless noted)
+
+| Variable | Where | Notes |
+| --- | --- | --- |
+| `DATABASE_URL` | API (and generate) | Neon / Postgres — never commit |
+| `ENCRYPTION_KEY` | API | 64 hex chars (32 bytes) |
+| `NWC_CONNECTION_STRING` | API | Lightning backend |
+| `OPENAI_API_KEY` / `OPENAI_MODEL` | API | Assistant; missing → clear 503, payments still work |
+| `WEB_ORIGIN` | API | Production web origin (cookie CORS) |
+| `APP_URL` | API | Public web URL (storefront / pay links) |
+| `API_URL` | API | Public **HTTPS** API origin (webhooks) |
+| `NEXT_PUBLIC_API_URL` | Web | Use `/api` for same-origin proxy |
+| `FLOW_SERVER_API_URL` | Web (server) | Internal/public API origin for Next rewrites |
+| `BITNOB_*` | API | Only after whoami succeeds |
+
+### CLI sketch
+
+```bash
+# API
+cd apps/api
+vercel link --yes --project flow-rpay-api
+vercel env add DATABASE_URL production
+# …add other secrets via vercel env add / dashboard…
+vercel --prod
+
+# Web
+cd ../web
+vercel link --yes --project flow-rpay-web
+vercel env add NEXT_PUBLIC_API_URL production   # value: /api
+vercel env add FLOW_SERVER_API_URL production   # value: https://<api-deployment>
+vercel --prod
+```
+
+Never commit `.env`, wallet passwords, macaroons, or TLS material. `.gitignore` already excludes them.

@@ -10,8 +10,11 @@ type BitnobPayout = {
   fees?: string;
   expires_at?: string;
   address?: string;
+  deposit_address?: string;
   deposit_amount?: string;
   sat_amount?: string;
+  total_amount?: string;
+  status?: string;
 };
 
 export type BitnobSupportedCountry = {
@@ -24,6 +27,8 @@ export type BitnobSupportedCountry = {
 export type BitnobWhoami = {
   environment?: string;
   company?: { name?: string; id?: string };
+  client_id?: string;
+  active?: boolean;
 };
 
 function missingBitnobEnv(): string[] {
@@ -47,7 +52,7 @@ function assertConfigured() {
     throw new ApiError(
       503,
       "payouts_unconfigured",
-      `Local withdrawal is not configured. Set ${missing.join(" and ")} (sandbox Client Secret from app.bitnob.com → Settings → API Keys). Base URL stays https://api.bitnob.com; the secret selects sandbox vs production.`,
+      `Local withdrawal is not configured. Set ${missing.join(" and ")} (sandbox Client ID + Client Secret from app.bitnob.com → Settings → API Keys). Base URL stays https://api.bitnob.com; the secret selects sandbox vs live.`,
     );
   }
 }
@@ -57,6 +62,7 @@ async function bitnob<T>(path: string, body?: unknown, method: "GET" | "POST" = 
   const raw = body === undefined ? "" : JSON.stringify(body);
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const nonce = randomBytes(16).toString("hex");
+  // Bitnob Business API: HMAC-SHA256 of CLIENT_ID:TIMESTAMP:NONCE:BODY keyed with client secret.
   const payload = `${env.bitnobClientId}:${timestamp}:${nonce}:${raw}`;
   const signature = createHmac("sha256", env.bitnobClientSecret).update(payload).digest("hex");
   const response = await fetch(`${env.bitnobBaseUrl}${path}`, {
@@ -70,9 +76,24 @@ async function bitnob<T>(path: string, body?: unknown, method: "GET" | "POST" = 
     },
     body: body === undefined ? undefined : raw,
   });
-  const json = (await response.json()) as { data?: T; detail?: string; error?: { message?: string }; message?: string };
+  const json = (await response.json()) as {
+    data?: T;
+    detail?: string;
+    code?: string;
+    error?: { message?: string; code?: string };
+    message?: string;
+  };
   if (!response.ok) {
-    throw new ApiError(response.status, "payout_provider_error", json.detail ?? json.error?.message ?? json.message ?? "Payout request failed");
+    const detail = json.detail ?? json.error?.message ?? json.message ?? "Payout request failed";
+    const code = json.code ?? json.error?.code ?? "";
+    if (response.status === 401 || code === "UNAUTHORIZED") {
+      throw new ApiError(
+        503,
+        "invalid_credentials",
+        "Local payout credentials were rejected (401). In app.bitnob.com → Settings → API Keys, create a sandbox key and set BITNOB_CLIENT_ID to the Client ID (or apiKey) and BITNOB_CLIENT_SECRET to the Client Secret (secretKey). Confirm with GET /api/whoami.",
+      );
+    }
+    throw new ApiError(response.status >= 500 ? 502 : response.status, "payout_provider_error", detail);
   }
   return (json.data ?? json) as T;
 }
@@ -89,22 +110,24 @@ export async function listSupportedCountries(): Promise<BitnobSupportedCountry[]
   return [];
 }
 
+/**
+ * Flow custody: fund from merchant sats via Lightning deposit into the payout.
+ * Docs: source=onchain, chain=LIGHTNING, amount_in_base_units (sats), then initialize → pay invoice → finalize.
+ */
 export async function createPayoutQuote(input: {
   reference: string;
   country: string;
   currency: string;
   amountSats: string;
 }) {
-  const sats = BigInt(input.amountSats);
-  const btcAmount = `${sats / 100_000_000n}.${(sats % 100_000_000n).toString().padStart(8, "0")}`;
   const data = await bitnob<{ payout: BitnobPayout }>("/api/payouts/quotes", {
     reference: input.reference,
     country: input.country.toUpperCase(),
     from_asset: "BTC",
     to_currency: input.currency.toUpperCase(),
     source: "onchain",
-    chain: "BITCOIN",
-    amount: btcAmount,
+    chain: "LIGHTNING",
+    amount_in_base_units: input.amountSats,
   });
   const payout = data.payout ?? (data as unknown as BitnobPayout);
   if (!payout.quote_id && !payout.id) {
@@ -121,7 +144,7 @@ export async function initializePayout(
     callbackUrl: string;
   },
 ) {
-  const data = await bitnob<{ payout: BitnobPayout }>(`/api/payouts/${quoteId}/initialize`, {
+  const data = await bitnob<{ payout: BitnobPayout }>(`/api/payouts/${encodeURIComponent(quoteId)}/initialize`, {
     quote_id: quoteId,
     beneficiary: input.beneficiary,
     reference: input.reference,
@@ -136,7 +159,13 @@ export async function finalizePayout(quoteId: string) {
   return data.payout ?? (data as unknown as BitnobPayout);
 }
 
-/** Bitnob's sandbox accepts a simulated deposit; never call this for production credentials. */
-export async function simulateSandboxDeposit(quoteId: string, amountSats: string) {
-  return bitnob(`/api/payouts/quotes/${encodeURIComponent(quoteId)}/deposits`, { amount: amountSats });
+/** Funding target from an initialized onchain quote (Lightning invoice or chain address). */
+export function payoutFundingTarget(payout: BitnobPayout): string | null {
+  const target = payout.address ?? payout.deposit_address ?? null;
+  return target?.trim() ? target.trim() : null;
+}
+
+export function isLightningInvoice(value: string): boolean {
+  const lower = value.toLowerCase();
+  return lower.startsWith("lnbc") || lower.startsWith("lntb") || lower.startsWith("lnbcrt") || lower.startsWith("lnurl");
 }

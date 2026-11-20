@@ -2,7 +2,15 @@ import { prisma } from "@flow/db";
 import { ApiError } from "./errors.js";
 import { env } from "./env.js";
 import { payInvoice, sendCoins } from "./lightning.js";
-import { bitnobWebhookConfigured, bitnobWhoami, createPayoutQuote, finalizePayout, initializePayout, simulateSandboxDeposit } from "./bitnob.js";
+import {
+  bitnobWebhookConfigured,
+  bitnobWhoami,
+  createPayoutQuote,
+  finalizePayout,
+  initializePayout,
+  isLightningInvoice,
+  payoutFundingTarget,
+} from "./bitnob.js";
 import { randomToken } from "./crypto.js";
 import { withdrawalView } from "./serialize.js";
 
@@ -32,6 +40,15 @@ async function capture(businessId: string, amount: bigint) {
       reservedSats: { decrement: amount },
     },
   });
+}
+
+async function requireSandboxIdentity() {
+  const identity = await bitnobWhoami();
+  const environment = (identity.environment ?? "").toLowerCase();
+  if (environment !== "sandbox") {
+    throw new ApiError(503, "sandbox_required", "Local withdrawals are enabled for sandbox credentials only. Confirm GET /api/whoami returns environment=sandbox.");
+  }
+  return identity;
 }
 
 export async function withdrawBitcoin(businessId: string, input: { amount: string; address?: string; invoice?: string }) {
@@ -72,8 +89,7 @@ export async function withdrawBitcoin(businessId: string, input: { amount: strin
 }
 
 export async function quoteLocal(businessId: string, input: { amount: string; country: string; currency: string }) {
-  const identity = await bitnobWhoami();
-  if (identity.environment !== "sandbox") throw new ApiError(503, "sandbox_required", "Local withdrawals are enabled for Bitnob sandbox credentials only");
+  await requireSandboxIdentity();
   const business = await prisma.business.findUnique({ where: { id: businessId } });
   if (!business) throw new ApiError(404, "not_found", "Business not found");
   if (business.country.toUpperCase() !== input.country.toUpperCase()) {
@@ -98,7 +114,7 @@ export async function quoteLocal(businessId: string, input: { amount: string; co
       kind: "local",
       amountSats: BigInt(input.amount),
       status: "quoted",
-      // Hold Bitnob reference until confirm overwrites with the beneficiary label.
+      // Hold provider reference until confirm overwrites with the beneficiary label.
       destination: reference,
       country: input.country.toUpperCase(),
       currency: input.currency.toUpperCase(),
@@ -139,14 +155,26 @@ export async function confirmLocal(
     throw new ApiError(422, "network_required", "A mobile-money network is required");
   }
   const reference = withdrawal.destination.startsWith("flow_") ? withdrawal.destination : `flow_${randomToken(9)}`;
-  if (!bitnobWebhookConfigured()) throw new ApiError(503, "webhook_unconfigured", "Configure the Bitnob webhook signing secret before confirming a payout");
-  const identity = await bitnobWhoami();
-  if (identity.environment !== "sandbox") throw new ApiError(503, "sandbox_required", "Local withdrawals are enabled for Bitnob sandbox credentials only");
+  if (!bitnobWebhookConfigured()) {
+    throw new ApiError(
+      503,
+      "webhook_unconfigured",
+      "Configure BITNOB_WEBHOOK_SECRET (webhook signing secret from the payout dashboard, not the API secret) before confirming a payout.",
+    );
+  }
+  await requireSandboxIdentity();
   const callbackUrl = `${env.apiUrl.replace(/\/$/, "")}/webhooks/bitnob`;
-  if (!callbackUrl.startsWith("https://")) throw new ApiError(503, "webhook_unreachable", "Set API_URL to the public HTTPS API origin before confirming a payout");
+  if (!callbackUrl.startsWith("https://")) {
+    throw new ApiError(
+      503,
+      "webhook_unreachable",
+      "Set API_URL to the public HTTPS API origin (Vercel API URL or a tunnel) before confirming a payout so webhooks can reach POST /webhooks/bitnob.",
+    );
+  }
   await reserve(businessId, withdrawal.amountSats);
   let sent = false;
   try {
+    // Step 2: initialize → funding target (Lightning invoice for onchain LIGHTNING quotes).
     const payout = await initializePayout(input.quoteId, {
       beneficiary: {
         destination_type: input.beneficiary.destinationType,
@@ -159,10 +187,28 @@ export async function confirmLocal(
       reference,
       callbackUrl,
     });
-    // Sandbox funding is simulated by Bitnob. NWC faucet sats cannot be sent
-    // to Bitnob, and production payouts are blocked above.
+    const fundingTarget = payoutFundingTarget(payout);
+    if (!fundingTarget) {
+      throw new ApiError(502, "payout_provider_error", "The payout provider did not return a Lightning funding invoice");
+    }
+    if (!isLightningInvoice(fundingTarget)) {
+      throw new ApiError(
+        503,
+        "funding_unsupported",
+        "This payout requires an on-chain deposit address. Flow funds local payouts over Lightning only.",
+      );
+    }
+    // Fund from Flow custody via the configured Lightning backend (NWC when set).
+    const paid = await payInvoice(fundingTarget);
+    if (paid.payment_error) {
+      throw new ApiError(
+        502,
+        "funding_failed",
+        `Could not pay the payout funding invoice: ${paid.payment_error}. Sandbox faucet wallets often cannot pay external invoices — use a wallet that can pay the funding invoice, then retry.`,
+      );
+    }
+    // Step 3: finalize after deposit/payment is submitted.
     const finalized = await finalizePayout(input.quoteId);
-    await simulateSandboxDeposit(input.quoteId, finalized.sat_amount ?? withdrawal.amountSats.toString());
     sent = true;
     await capture(businessId, withdrawal.amountSats);
     const updated = await prisma.withdrawal.update({
@@ -170,7 +216,7 @@ export async function confirmLocal(
       data: {
         status: "processing",
         destination: `${input.beneficiary.accountName} ${input.beneficiary.accountNumber}`,
-        fundingTarget: "Bitnob sandbox simulated deposit",
+        fundingTarget,
         providerPayout: finalized.id ?? payout.id ?? null,
       },
     });
