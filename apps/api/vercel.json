@@ -1,13 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": null,
+  "framework": "fastify",
   "installCommand": "cd ../.. && pnpm install",
-  "buildCommand": "cd ../.. && pnpm --filter @flow/db generate && pnpm --filter @flow/contracts build && pnpm --filter @flow/db build",
-  "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
-  "functions": {
-    "api/index.ts": {
-      "maxDuration": 60,
-      "includeFiles": "{../../packages/db/prisma/**,../../packages/contracts/dist/**,../../packages/db/dist/**}"
-    }
-  }
+  "buildCommand": "cd ../.. && pnpm --filter @flow/db generate && pnpm --filter @flow/contracts build && pnpm --filter @flow/db build"
 }
