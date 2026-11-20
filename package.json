@@ -6,6 +6,7 @@
     "dev": "pnpm --parallel --filter @flow/api --filter @flow/web dev",
     "db:generate": "pnpm --filter @flow/db generate",
     "db:push": "pnpm --filter @flow/db push",
+    "db:seed": "pnpm --filter @flow/db seed",
     "test": "pnpm --filter @flow/contracts test",
     "typecheck": "pnpm -r --if-present typecheck",
     "postinstall": "pnpm --filter @flow/db generate && pnpm --filter @flow/contracts build && pnpm --filter @flow/db build"

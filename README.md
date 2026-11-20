@@ -10,11 +10,30 @@ Lightning commerce. Buyers pay a Flow invoice on Flow’s Lightning backend. Mer
 4. `pnpm install`
 5. `pnpm db:generate`
 6. `pnpm db:push`
-7. `pnpm dev`
+7. `pnpm db:seed` — demo merchant for judges (idempotent)
+8. `pnpm dev`
 
 Web: http://localhost:3000 · API: http://localhost:4000
 
 The API refuses Lightning work until a backend is configured. It never invents invoices.
+
+## Judge demo
+
+Use these fixed credentials on production or local after seeding:
+
+| | |
+| --- | --- |
+| **URL** | https://flow.rpay.space · local: http://localhost:3000 |
+| **Email** | `demo@flow.rpay.space` |
+| **Password** | `FlowDemo2026!` |
+
+Shop: **Flow Demo Shop** — three sample products (prices in sats) plus pay link `/pay/link/flow-demo`.
+
+**Notes for judges**
+
+- Lightning uses **testnet / NWC demo sats**, not mainnet. Do not expect real on-chain value.
+- Local currency withdraw may show **unavailable** if payout credentials are not configured.
+- Re-seed anytime: `pnpm db:seed` (upserts by email; safe to re-run). For production Neon, point `DATABASE_URL` at that DB first (never commit the URL).
 
 ## Lightning: NWC (primary — hackathon)
 
