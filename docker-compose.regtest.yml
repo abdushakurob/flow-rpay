@@ -1,0 +1,67 @@
+# Optional Bitcoin + Lightning regtest stack (tiny local chain — no IBD).
+# Default `docker compose up` stays Postgres-only.
+#
+# Start (with Postgres):
+#   docker compose -f docker-compose.yml -f docker-compose.regtest.yml up -d
+# Bootstrap wallets / mine / channel:
+#   pwsh -File scripts/regtest-bootstrap.ps1
+#
+# Images prefer tags already common locally (bitcoin/bitcoin:28.1, lnd v0.18.5-beta).
+
+services:
+  bitcoind:
+    image: bitcoin/bitcoin:28.1
+    command:
+      - -printtoconsole
+      - -regtest=1
+      - -server=1
+      - -txindex=1
+      - -rpcallowip=0.0.0.0/0
+      - -rpcbind=0.0.0.0
+      - -rpcport=18443
+      - -rpcuser=flow
+      - -rpcpassword=flow
+      - -fallbackfee=0.0002
+      - -zmqpubrawblock=tcp://0.0.0.0:28332
+      - -zmqpubrawtx=tcp://0.0.0.0:28333
+    ports:
+      - "18443:18443"
+    volumes:
+      - ./data/regtest/bitcoind:/home/bitcoin/.bitcoin
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-regtest", "-rpcuser=flow", "-rpcpassword=flow", "getblockchaininfo"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Flow’s node — REST on host :8081 (avoid clashing with common :8080).
+  lnd:
+    image: lightninglabs/lnd:v0.18.5-beta
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+      - "10009:10009"
+      - "9735:9735"
+    volumes:
+      - ./data/regtest/lnd:/root/.lnd
+      - ./docker/regtest/lnd.conf:/root/.lnd/lnd.conf:ro
+      - ./docker/regtest/wallet-password.txt:/tmp/wallet-password:ro
+    restart: unless-stopped
+
+  # Second node for paying Flow invoices (lncli payinvoice).
+  lnd-peer:
+    image: lightninglabs/lnd:v0.18.5-beta
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+      - "10010:10009"
+      - "9736:9735"
+    volumes:
+      - ./data/regtest/lnd-peer:/root/.lnd
+      - ./docker/regtest/lnd-peer.conf:/root/.lnd/lnd.conf:ro
+      - ./docker/regtest/wallet-password.txt:/tmp/wallet-password:ro
+    restart: unless-stopped

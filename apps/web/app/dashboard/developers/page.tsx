@@ -1,0 +1,33 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { api } from "@/lib/api";
+import { Icon } from "../../../components/icon";
+
+type Key = { id: string; prefix: string };
+type Endpoint = { id: string; url: string; createdAt: string };
+export default function DevelopersPage() {
+  const [keys, setKeys] = useState<Key[]>([]);
+  const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [createdKey, setCreatedKey] = useState("");
+  const [createdSecret, setCreatedSecret] = useState("");
+  const [copied, setCopied] = useState("");
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  async function load() { try { const [nextKeys, nextEndpoints] = await Promise.all([api<Key[]>("/dashboard/api-keys"), api<Endpoint[]>("/dashboard/webhook-endpoints")]); setKeys(nextKeys); setEndpoints(nextEndpoints); setError(""); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not load developer settings."); } finally { setLoading(false); } }
+  useEffect(() => { void load(); }, []);
+  async function createKey() { setBusy(true); setError(""); setCreatedKey(""); try { const result = await api<{ key: string }>("/dashboard/api-keys", { method: "POST" }); setCreatedKey(result.key); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not create an API key."); } finally { setBusy(false); } }
+  async function addEndpoint() { const url = webhookUrl.trim(); if (!/^https:\/\//.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(url)) { setError("Enter an HTTPS URL, or an HTTP localhost URL for development."); return; } setBusy(true); setError(""); setCreatedSecret(""); try { const result = await api<Endpoint & { secret: string }>("/dashboard/webhook-endpoints", { method: "POST", body: JSON.stringify({ url }) }); setCreatedSecret(result.secret); setWebhookUrl(""); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not add the endpoint."); } finally { setBusy(false); } }
+  async function removeEndpoint(id: string) { setBusy(true); setError(""); try { await api("/dashboard/webhook-endpoints/" + id, { method: "DELETE" }); setRemoving(null); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not remove the endpoint."); } finally { setBusy(false); } }
+  async function copy(value: string, label: string) { try { await navigator.clipboard.writeText(value); setCopied(label); } catch { setError("Copy failed. Select and copy the value manually."); } }
+  return <main className="workspace-page"><div className="workspace-heading"><div><span className="page-eyebrow">BUILD WITH FLOW</span><h1>Developers</h1><p>Connect your app with API keys and signed payment events.</p></div><Link className="docs-link" href="/docs"><Icon name="book" size={17}/> Read the docs <Icon name="arrow-up-right" size={14}/></Link></div>
+    {error && <div className="state-error" role="alert"><Icon name="alert" size={18}/><span>{error}</span><button type="button" onClick={() => void load()}>Retry</button></div>}
+    <div className="developer-grid"><section className="workspace-panel"><div className="panel-heading"><span className="panel-icon"><Icon name="code" size={18}/></span><div><h2>API keys</h2><p>Authenticate server-to-server requests.</p></div></div><p className="field-hint">Keys are only shown once. Keep them private and use them on your server.</p><button className="primary-action" type="button" disabled={busy} onClick={() => void createKey()}><Icon name="plus" size={16}/>{busy ? "Working…" : "Create API key"}</button>{createdKey && <div className="secret-card" role="status"><strong>New API key · copy now</strong><div><code>{createdKey}</code><button type="button" onClick={() => void copy(createdKey, "key")}><Icon name={copied === "key" ? "check" : "copy"} size={16}/>{copied === "key" ? "Copied" : "Copy"}</button></div></div>}<div className="simple-list">{loading ? <div className="skeleton-list"><i/><i/></div> : keys.length === 0 ? <div className="empty-state"><Icon name="code" size={23}/><strong>No API keys yet</strong><p>Create one to start integrating.</p></div> : keys.map((key) => <div key={key.id}><Icon name="code" size={16}/><span>{key.prefix}…</span><small>Active</small></div>)}</div></section>
+      <section className="workspace-panel"><div className="panel-heading"><span className="panel-icon"><Icon name="link" size={18}/></span><div><h2>Webhook endpoints</h2><p>Receive payment.paid events.</p></div></div><label className="standalone-label" htmlFor="webhook-url">Endpoint URL</label><div className="endpoint-form"><input id="webhook-url" type="url" value={webhookUrl} onChange={(event) => { setWebhookUrl(event.target.value); setError(""); }} placeholder="https://example.com/webhooks/flow"/><button className="primary-action" type="button" disabled={busy} onClick={() => void addEndpoint()}>Add endpoint</button></div>{createdSecret && <div className="secret-card" role="status"><strong>Signing secret · copy now</strong><div><code>{createdSecret}</code><button type="button" onClick={() => void copy(createdSecret, "secret")}><Icon name={copied === "secret" ? "check" : "copy"} size={16}/>{copied === "secret" ? "Copied" : "Copy"}</button></div></div>}<div className="simple-list">{loading ? <div className="skeleton-list"><i/><i/></div> : endpoints.length === 0 ? <div className="empty-state"><Icon name="link" size={23}/><strong>No endpoints yet</strong><p>Add an endpoint to receive signed events.</p></div> : endpoints.map((endpoint) => <div key={endpoint.id}><Icon name="link" size={16}/><span title={endpoint.url}>{endpoint.url}</span><button type="button" onClick={() => setRemoving(endpoint.id)}>Remove</button></div>)}</div></section></div>
+    {removing && <div className="modal-backdrop"><section className="quote-dialog" role="dialog" aria-modal="true" aria-labelledby="remove-title"><span className="panel-icon"><Icon name="alert" size={20}/></span><h2 id="remove-title">Remove webhook endpoint?</h2><p>Flow will stop sending payment events to this URL.</p><div className="dialog-actions"><button type="button" onClick={() => setRemoving(null)}>Cancel</button><button type="button" className="primary-action" disabled={busy} onClick={() => void removeEndpoint(removing)}>{busy ? "Removing…" : "Remove endpoint"}</button></div></section></div>}
+  </main>;
+}

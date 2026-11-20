@@ -1,0 +1,20 @@
+{
+  "name": "flow",
+  "private": true,
+  "packageManager": "pnpm@10.26.1",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @flow/api --filter @flow/web dev",
+    "db:generate": "pnpm --filter @flow/db generate",
+    "db:push": "pnpm --filter @flow/db push",
+    "test": "pnpm --filter @flow/contracts test",
+    "typecheck": "pnpm -r --if-present typecheck"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "esbuild",
+      "prisma"
+    ]
+  }
+}

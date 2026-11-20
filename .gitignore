@@ -1,0 +1,16 @@
+node_modules
+dist
+.next
+.env
+.env.local
+**/.env.*
+!.env.example
+data
+creds/*
+!creds/.gitkeep
+*.log
+*.tsbuildinfo
+.vercel/
+tmp-*
+docker/regtest/wallet-password.txt
+packages/db/src/generated

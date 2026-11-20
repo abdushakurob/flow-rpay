@@ -1,0 +1,189 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String     @id @default(uuid())
+  email        String     @unique
+  passwordHash String
+  createdAt    DateTime   @default(now())
+  businesses   Business[]
+  sessions     Session[]
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model Business {
+  id              String           @id @default(uuid())
+  ownerId         String
+  owner           User             @relation(fields: [ownerId], references: [id])
+  name            String
+  country         String
+  balanceSats     BigInt           @default(0)
+  reservedSats    BigInt           @default(0)
+  aiMode          String           @default("flow")
+  openaiKeyCipher String?
+  openaiModel     String           @default("gpt-4.1")
+  createdAt       DateTime         @default(now())
+  products        Product[]
+  orders          Order[]
+  payments        Payment[]
+  links           PaymentLink[]
+  withdrawals     Withdrawal[]
+  apiKeys         ApiKey[]
+  endpoints       WebhookEndpoint[]
+  idempotency     IdempotencyKey[]
+  bots            TelegramBot[]
+  actions         AiAction[]
+}
+
+model Product {
+  id          String        @id @default(uuid())
+  businessId  String
+  business    Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name        String
+  description String        @default("")
+  priceSats   BigInt
+  active      Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  links       PaymentLink[]
+}
+
+model Order {
+  id          String   @id @default(uuid())
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  reference   String
+  description String
+  buyerName   String?
+  buyerEmail  String?
+  amountSats  BigInt
+  status      String
+  createdAt   DateTime @default(now())
+  payments    Payment[]
+
+  @@unique([businessId, reference])
+}
+
+model Payment {
+  id           String    @id @default(uuid())
+  businessId   String
+  business     Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  orderId      String
+  order        Order     @relation(fields: [orderId], references: [id])
+  amountSats   BigInt
+  status       String
+  paymentHash  String?
+  bolt11       String?
+  expiresAt    DateTime?
+  preimage     String?
+  createdAt    DateTime  @default(now())
+  paidAt       DateTime?
+}
+
+model PaymentLink {
+  id         String   @id @default(uuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  slug       String   @unique
+  status     String   @default("active")
+  createdAt  DateTime @default(now())
+}
+
+model Withdrawal {
+  id             String   @id @default(uuid())
+  businessId     String
+  business       Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  kind           String
+  amountSats     BigInt
+  status         String
+  destination    String
+  country        String?
+  currency       String?
+  localAmount    String?
+  rate           String?
+  fees           String?
+  providerQuote  String?
+  providerPayout String?
+  fundingTarget  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model ApiKey {
+  id         String   @id @default(uuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  prefix     String
+  keyHash    String   @unique
+  createdAt  DateTime @default(now())
+}
+
+model WebhookEndpoint {
+  id           String   @id @default(uuid())
+  businessId   String
+  business     Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  url          String
+  secretCipher String
+  createdAt    DateTime @default(now())
+}
+
+model IdempotencyKey {
+  id           String   @id @default(uuid())
+  businessId   String
+  business     Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  key          String
+  requestHash  String
+  statusCode   Int
+  responseJson Json
+  createdAt    DateTime @default(now())
+
+  @@unique([businessId, key])
+}
+
+model WebhookEvent {
+  id          String    @id
+  type        String
+  payload     Json
+  status      String
+  lockedUntil DateTime?
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+model TelegramBot {
+  id         String   @id @default(uuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  username   String
+  tokenCipher String
+  secret     String
+  status     String
+  createdAt  DateTime @default(now())
+
+  @@unique([businessId])
+}
+
+model AiAction {
+  id         String   @id @default(uuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  actionType String
+  arguments  Json
+  status     String
+  createdAt  DateTime @default(now())
+}
