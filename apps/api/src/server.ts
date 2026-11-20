@@ -114,8 +114,10 @@ export async function buildServer() {
 
   app.get("/health", async () => {
     const network = configuredLightningNetwork();
+    const databaseConfigured = Boolean(env.databaseUrl);
     return {
-      ok: true,
+      ok: databaseConfigured,
+      databaseConfigured,
       network,
       banner: networkBannerCopy(network),
       localPayouts: {

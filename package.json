@@ -8,7 +8,7 @@
     "db:push": "pnpm --filter @flow/db push",
     "test": "pnpm --filter @flow/contracts test",
     "typecheck": "pnpm -r --if-present typecheck",
-    "postinstall": "pnpm --filter @flow/db generate"
+    "postinstall": "pnpm --filter @flow/db generate && pnpm --filter @flow/contracts build && pnpm --filter @flow/db build"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

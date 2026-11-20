@@ -30,7 +30,8 @@ function optionalPath(value: string | undefined): string | null {
 const lndTlsSkipVerify = (process.env.LND_TLS_SKIP_VERIFY ?? "").toLowerCase() === "true";
 
 export const env = {
-  databaseUrl: required("DATABASE_URL"),
+  /** Empty when unset — /health still boots; Prisma routes fail until Neon URL is set. */
+  databaseUrl: (process.env.DATABASE_URL ?? "").trim(),
   port: Number(process.env.API_PORT ?? 4000),
   apiUrl: process.env.API_URL ?? "http://localhost:4000",
   appUrl: process.env.APP_URL ?? "http://localhost:3000",

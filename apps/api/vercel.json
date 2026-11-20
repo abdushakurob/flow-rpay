@@ -2,10 +2,5 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "fastify",
   "installCommand": "cd ../.. && pnpm install",
-  "functions": {
-    "src/index.ts": {
-      "maxDuration": 60,
-      "includeFiles": "../../packages/db/prisma/**"
-    }
-  }
+  "buildCommand": "cd ../.. && pnpm --filter @flow/db generate && pnpm --filter @flow/contracts build && pnpm --filter @flow/db build"
 }
