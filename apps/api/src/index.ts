@@ -1,19 +1,38 @@
 import Fastify from "fastify"; // Vercel Fastify detector requires this import in the entry file
-import { buildServer } from "./create-app.js";
 import { env } from "./env.js";
 import { pollOpenPayments } from "./payments.js";
 import { assertTestnet, lightningProviderLabel } from "./lightning.js";
 
-void Fastify; // keep the import live for the detector / bundler
+void Fastify;
 
-const app = await buildServer();
+async function boot() {
+  try {
+    const { buildServer } = await import("./create-app.js");
+    return await buildServer();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const fallback = Fastify({ logger: true });
+    fallback.get("/health", async () => ({
+      ok: false,
+      databaseConfigured: Boolean(env.databaseUrl),
+      bootError: message,
+    }));
+    fallback.setErrorHandler((_err, _req, reply) =>
+      reply.status(503).send({ error: { code: "boot_failed", message } }),
+    );
+    return fallback;
+  }
+}
 
-// Vercel Fluid / serverless: export the Fastify instance; do not bind a port on Vercel.
+const app = await boot();
+
+// Vercel intercepts listen() under Fluid; still call it so the platform wires HTTP.
+await app.listen({ port: env.port, host: "0.0.0.0" });
+app.log.info(`Flow API at ${env.apiUrl}`);
+
 export default app;
 
-async function startLocal() {
-  await app.listen({ port: env.port, host: "0.0.0.0" });
-  app.log.info(`Flow API at ${env.apiUrl}`);
+if (!process.env.VERCEL) {
   try {
     await assertTestnet();
     app.log.info(`Lightning ready via ${lightningProviderLabel()}`);
@@ -23,13 +42,7 @@ async function startLocal() {
       "Lightning unavailable until NWC_CONNECTION_STRING (recommended) or COINOS_TOKEN or OPENNODE_API_KEY or LND_REST_URL + macaroon are set",
     );
   }
-  // Always-on poller is for long-lived local/dev processes only.
-  // On Vercel, payment GETs call settleFromNode / pollOpenPayments on read instead.
   setInterval(() => {
     void pollOpenPayments().catch((error) => app.log.warn(error));
   }, 4000);
-}
-
-if (!process.env.VERCEL) {
-  await startLocal();
 }
