@@ -5,12 +5,13 @@ import { assertTestnet, lightningProviderLabel } from "./lightning.js";
 
 const app = await buildServer();
 
-// Vercel Fluid / serverless: export the Fastify instance; do not bind a port.
+// Fastify zero-config on Vercel: listen() is intercepted; export keeps Fluid entry clear.
 export default app;
 
-async function startLocal() {
-  await app.listen({ port: env.port, host: "0.0.0.0" });
-  app.log.info(`Flow API at ${env.apiUrl}`);
+await app.listen({ port: env.port, host: "0.0.0.0" });
+app.log.info(`Flow API at ${env.apiUrl}`);
+
+if (!process.env.VERCEL) {
   try {
     await assertTestnet();
     app.log.info(`Lightning ready via ${lightningProviderLabel()}`);
@@ -25,8 +26,4 @@ async function startLocal() {
   setInterval(() => {
     void pollOpenPayments().catch((error) => app.log.warn(error));
   }, 4000);
-}
-
-if (!process.env.VERCEL) {
-  await startLocal();
 }

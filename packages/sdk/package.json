@@ -1,12 +1,44 @@
 {
   "name": "@rpay/flow",
   "version": "0.0.1",
+  "description": "Official TypeScript client for Flow by RPay — checkouts, payment links, withdrawals, and webhook verification.",
+  "license": "MIT",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "pnpm run build",
     "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "rpay",
+    "flow",
+    "lightning",
+    "bitcoin",
+    "payments",
+    "checkout"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abdushakurob/flow-rpay.git",
+    "directory": "packages/sdk"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

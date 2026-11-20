@@ -147,7 +147,7 @@ Payment settlement on Vercel does **not** use a long-lived poller. Checkout/paym
 
 | Variable | Where | Notes |
 | --- | --- | --- |
-| `DATABASE_URL` | API (and generate) | Neon / Postgres — never commit |
+| `DATABASE_URL` | API (and generate) | **Required for prod.** Neon / Postgres — never commit. Localhost-only in repo `.env*` — do not invent credentials. |
 | `ENCRYPTION_KEY` | API | 64 hex chars (32 bytes) |
 | `NWC_CONNECTION_STRING` | API | Lightning backend |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | API | Assistant; missing → clear 503, payments still work |
@@ -158,22 +158,32 @@ Payment settlement on Vercel does **not** use a long-lived poller. Checkout/paym
 | `FLOW_SERVER_API_URL` | Web (server) | Internal/public API origin for Next rewrites |
 | `BITNOB_*` | API | Only after whoami succeeds |
 
+### Blocker: Neon / `DATABASE_URL`
+
+Production API needs a hosted Postgres URL. Adding Neon via CLI is blocked until the project owner accepts Marketplace terms:
+
+1. Open [Accept Neon terms](https://vercel.com/abdu-shakurs-projects/~/integrations/accept-terms/neon?source=cli)
+2. Then: `vercel --cwd apps/api integration add neon --name flow-rpay-db --plan free_v3 --no-claim -m region=iad1 -m auth=false --environment production --environment preview --environment development`
+3. Confirm `DATABASE_URL` appears under `flow-rpay-api` (`vercel env ls --cwd apps/api`) and redeploy the API.
+
+Until then, API routes that touch Prisma will fail at runtime even if the deploy builds.
+
 ### CLI sketch
 
 ```bash
 # API
 cd apps/api
 vercel link --yes --project flow-rpay-api
-vercel env add DATABASE_URL production
-# …add other secrets via vercel env add / dashboard…
-vercel --prod
+# After Neon terms: vercel integration add neon … (see above) OR vercel env add DATABASE_URL production
+# …other secrets already set via vercel env add…
+vercel deploy --prod
 
 # Web
 cd ../web
 vercel link --yes --project flow-rpay-web
-vercel env add NEXT_PUBLIC_API_URL production   # value: /api
-vercel env add FLOW_SERVER_API_URL production   # value: https://<api-deployment>
-vercel --prod
+vercel env add NEXT_PUBLIC_API_URL production --type config   # value: /api
+vercel env add FLOW_SERVER_API_URL production --type config   # value: https://<api-deployment>
+vercel deploy --prod
 ```
 
 Never commit `.env`, wallet passwords, macaroons, or TLS material. `.gitignore` already excludes them.
