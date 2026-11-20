@@ -166,7 +166,11 @@ Production API needs a hosted Postgres URL. Adding Neon via CLI is blocked until
 2. Then: `vercel --cwd apps/api integration add neon --name flow-rpay-db --plan free_v3 --no-claim -m region=iad1 -m auth=false --environment production --environment preview --environment development`
 3. Confirm `DATABASE_URL` appears under `flow-rpay-api` (`vercel env ls --cwd apps/api`) and redeploy the API.
 
-Until then, API routes that touch Prisma will fail at runtime even if the deploy builds.
+Until then, API routes that touch Prisma will fail at runtime even if the deploy builds. `/health` still responds and reports `databaseConfigured: false`.
+
+### Deployment protection
+
+`flow-rpay-api` must be **public** (SSO/Standard Protection off) so web rewrites, wallets, and webhooks can reach `*.vercel.app` and production domains. Prefers: `vercel project protection disable flow-rpay-api --sso`. Keep preview-only protection on web if desired; use Automation Bypass (`x-vercel-protection-bypass`) for CI against protected preview URLs.
 
 ### CLI sketch
 
