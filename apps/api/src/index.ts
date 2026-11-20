@@ -25,14 +25,15 @@ async function boot() {
 }
 
 const app = await boot();
-
-// Vercel intercepts listen() under Fluid; still call it so the platform wires HTTP.
-await app.listen({ port: env.port, host: "0.0.0.0" });
-app.log.info(`Flow API at ${env.apiUrl}`);
-
 export default app;
 
-if (!process.env.VERCEL) {
+if (process.env.VERCEL) {
+  // Do not await listen on Vercel — awaiting can hang module evaluation.
+  // Fluid wires the default export; fire-and-forget listen matches the platform example.
+  void app.listen({ port: Number(process.env.PORT) || env.port, host: "0.0.0.0" });
+} else {
+  await app.listen({ port: env.port, host: "0.0.0.0" });
+  app.log.info(`Flow API at ${env.apiUrl}`);
   try {
     await assertTestnet();
     app.log.info(`Lightning ready via ${lightningProviderLabel()}`);
